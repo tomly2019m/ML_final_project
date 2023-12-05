@@ -46,7 +46,7 @@ class LSTM(nn.Module):
 input_size = 7  # 输入特征数
 hidden_size = 64  # 隐藏层大小
 output_size = 7  # 输出特征数
-seq_length = 96  # 输入序列长度
+seq_length = 336  # 输入序列长度
 
 # 准备训练数据
 input_seq, target_seq = prepare_data(features_normalized, seq_length)
@@ -103,6 +103,10 @@ for epoch in range(epochs):
         val_avg_MSE_losses.append(average_val_MSE_loss)
         print(f'Epoch [{epoch + 1}/{epochs}], MSE Loss: {MSE_loss.item():.4f}, Val MSE Loss: {average_val_MSE_loss:.4f}, MAE Loss: {MAE_loss.item():.4f}, Val MAE Loss: {average_val_MAE_loss:.4f}')
 
+# 保存模型的路径
+output_path = './output/'
+torch.save(model, f"{output_path}lstm_{seq_length}h_epoch={epochs}.pt")
+
 # 绘制loss曲线
 plt.figure(figsize=(10, 5))
 plt.plot(range(1, epochs+1), train_MSE_losses, label='Train Loss')
@@ -123,11 +127,14 @@ draw_prediction = None
 model.eval()
 with torch.no_grad():
     test_losses = []
+    MAE_losses = []
     for test_inputs, test_targets in test_loader:
         test_inputs, test_targets = test_inputs.to(device), test_targets.to(device)
         test_outputs = model(test_inputs)
         test_loss = MSE(test_outputs, test_targets)
+        MAE_loss = MAE(test_outputs, test_targets)
         test_losses.append(test_loss.item())
+        MAE_losses.append(MAE_loss.item())
         if test_loss.item() < min_loss:
             min_loss = test_loss.item()
             draw_inputs = test_inputs
@@ -136,8 +143,9 @@ with torch.no_grad():
 
 # 计算均方根误差
 average_test_loss = np.mean(test_losses)
+average_MAE_loss = np.mean(MAE_losses)
 print(f'Mean Squared Error on Test Data: {average_test_loss:.4f}')
-
+print(f'Mean Absolute Error on Test Data: {average_MAE_loss:.4f}')
 
 # 获取最后一组预测结果
 predicted_outputs = draw_prediction
@@ -153,17 +161,17 @@ actual_outputs = scaler.inverse_transform(actual_outputs.reshape(-1, output_size
 input_data = draw_inputs.cpu().numpy().reshape(-1, input_size)
 input_data = scaler.inverse_transform(input_data)
 
-# 创建时间轴，只显示最后192小时的数据
-time_axis = np.arange(0, 192)
+# 创建时间轴
+time_axis = np.arange(0, 2 * seq_length)
 
 
 # 分别绘制每个特征的图表
 for i in range(output_size):
     plt.figure(figsize=(12, 6))
-    merged_actual = np.concatenate([input_data[-96:, i], actual_outputs[-96:, i]])
-    plt.plot(time_axis[-192:], merged_actual, label=f'Feature {i+1} (Actual 0-96h)')
-    plt.plot(time_axis[-96:], actual_outputs[-96:, i], label=f'Feature {i+1} (Actual 96h-192h)')
-    plt.plot(time_axis[-96:], predicted_outputs[-96:, i], label=f'Feature {i+1} (Predicted)', linestyle='dashed')
+    merged_actual = np.concatenate([input_data[-seq_length:, i], actual_outputs[-seq_length:, i]])
+    plt.plot(time_axis[-2 * seq_length:], merged_actual, label=f'Feature {i+1} (Actual 0-{seq_length}h)')
+    plt.plot(time_axis[-seq_length:], actual_outputs[-seq_length:, i], label=f'Feature {i+1} (Actual {seq_length}h-{2 * seq_length}h)')
+    plt.plot(time_axis[-seq_length:], predicted_outputs[-seq_length:, i], label=f'Feature {i+1} (Predicted)', linestyle='dashed')
 
     plt.title(f'Feature {i+1} - Time Series Prediction')
     plt.xlabel('Time Steps')
