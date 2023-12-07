@@ -46,7 +46,7 @@ class LSTM(nn.Module):
 input_size = 7  # 输入特征数
 hidden_size = 64  # 隐藏层大小
 output_size = 7  # 输出特征数
-seq_length = 336  # 输入序列长度
+seq_length = 96  # 输入序列长度
 
 # 准备训练数据
 input_seq, target_seq = prepare_data(features_normalized, seq_length)
@@ -61,9 +61,9 @@ val_dataset = TensorDataset(input_seq[train_size:train_size + val_size], target_
 test_dataset = TensorDataset(input_seq[train_size + val_size:], target_seq[train_size + val_size:])
 
 # 创建数据加载器
-train_loader = DataLoader(train_dataset, batch_size=64, shuffle=False)
-val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False)
-test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
+train_loader = DataLoader(train_dataset, batch_size=32, shuffle=False)
+val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
+test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
 
 # 初始化模型、损失函数和优化器，并将它们移动到 GPU
 model = LSTM(input_size, hidden_size, output_size).to(device)
@@ -105,7 +105,7 @@ for epoch in range(epochs):
 
 # 保存模型的路径
 output_path = './output/'
-torch.save(model, f"{output_path}lstm_{seq_length}h_epoch={epochs}.pt")
+# torch.save(model, f"{output_path}lstm_{seq_length}h_epoch={epochs}.pt")
 
 # 绘制loss曲线
 plt.figure(figsize=(10, 5))
