@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
 from sklearn.preprocessing import MinMaxScaler
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, TensorDataset, ConcatDataset, random_split
 
 # 读取数据
 data_path = '../../dataset/ETTh1.csv'
@@ -12,33 +12,45 @@ data = pd.read_csv(data_path)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+
+# 数据表头
+data_head = ['HUFL', 'HULL', 'MUFL', 'MULL', 'LUFL', 'LULL', 'OT']
+
 # 提取需要的特征列
-features = data[['HUFL', 'HULL', 'MUFL', 'MULL', 'LUFL', 'LULL', 'OT']].values
+features = data[data_head].values
 
 # 数据标准化
 scaler = MinMaxScaler(feature_range=(-1, 1))
 features_normalized = scaler.fit_transform(features)
 
+# 长时预测还是短时预测
+predict_type = "short"
+
+factor = 1 if predict_type == "short" else 3.5
+
 
 # 准备数据集
 def prepare_data(data, seq_length):
     input_seq, target_seq = [], []
-    for i in range(len(data) - seq_length * 2):
+    for i in range(len(data) - int(seq_length * (factor + 1))):
         input_seq.append(data[i:i + seq_length])
-        target_seq.append(data[i + seq_length:i + seq_length * 2])
+        target_seq.append(data[i + seq_length:i + int(seq_length * (factor + 1))])
     return torch.FloatTensor(input_seq).to(device), torch.FloatTensor(target_seq).to(device)
 
 
+# 32 * 96 * 7 -> 32 * 96 * 64 -> 32 * 96 * 56 -> 32 * 336 * 16 -> 32 * 336 * 7
 # 定义模型
 class LSTM(nn.Module):
     def __init__(self, input_size, hidden_size, output_size):
         super(LSTM, self).__init__()
         self.lstm = nn.LSTM(input_size, hidden_size, batch_first=True)
-        self.linear = nn.Linear(hidden_size, output_size)
+        self.linear = nn.Linear(hidden_size, int(16 * factor))
+        self.linear2 = nn.Linear(16, output_size)
 
     def forward(self, x):
         lstm_out, _ = self.lstm(x)
-        predictions = self.linear(lstm_out)
+        linear_out = self.linear(lstm_out)
+        predictions = self.linear2(linear_out.view(linear_out.size(0), int(factor * seq_length), 16))
         return predictions
 
 
@@ -59,6 +71,18 @@ test_size = len(input_seq) - train_size - val_size
 train_dataset = TensorDataset(input_seq[:train_size], target_seq[:train_size])
 val_dataset = TensorDataset(input_seq[train_size:train_size + val_size], target_seq[train_size:train_size + val_size])
 test_dataset = TensorDataset(input_seq[train_size + val_size:], target_seq[train_size + val_size:])
+
+# 合并三个数据集
+combined_dataset = ConcatDataset([train_dataset, val_dataset, test_dataset])
+
+# 计算各个数据集的新划分大小
+total_size = len(combined_dataset)
+train_size = int(0.6 * total_size)
+val_size = int(0.2 * total_size)
+test_size = total_size - train_size - val_size
+
+# 划分合并后的数据集
+train_dataset, val_dataset, test_dataset = random_split(combined_dataset, [train_size, val_size, test_size])
 
 # 创建数据加载器
 train_loader = DataLoader(train_dataset, batch_size=32, shuffle=False)
@@ -101,16 +125,17 @@ for epoch in range(epochs):
         average_val_MAE_loss = np.mean(val_MAE_losses)
         train_MSE_losses.append(MSE_loss.item())
         val_avg_MSE_losses.append(average_val_MSE_loss)
-        print(f'Epoch [{epoch + 1}/{epochs}], MSE Loss: {MSE_loss.item():.4f}, Val MSE Loss: {average_val_MSE_loss:.4f}, MAE Loss: {MAE_loss.item():.4f}, Val MAE Loss: {average_val_MAE_loss:.4f}')
+        print(
+            f'Epoch [{epoch + 1}/{epochs}], MSE Loss: {MSE_loss.item():.6f}, Val MSE Loss: {average_val_MSE_loss:.6f}, MAE Loss: {MAE_loss.item():.6f}, Val MAE Loss: {average_val_MAE_loss:.6f}')
 
 # 保存模型的路径
 output_path = './output/'
-# torch.save(model, f"{output_path}lstm_{seq_length}h_epoch={epochs}.pt")
+torch.save(model, f"{output_path}lstm_{seq_length}h_epoch={epochs}.pt")
 
 # 绘制loss曲线
 plt.figure(figsize=(10, 5))
-plt.plot(range(1, epochs+1), train_MSE_losses, label='Train Loss')
-plt.plot(range(1, epochs+1), val_avg_MSE_losses, label='Validation Loss')
+plt.plot(range(1, epochs + 1), train_MSE_losses, label='Train Loss')
+plt.plot(range(1, epochs + 1), val_avg_MSE_losses, label='Validation Loss')
 plt.title('Training and Validation Loss Over Epochs')
 plt.xlabel('Epochs')
 plt.ylabel('Loss')
@@ -162,19 +187,20 @@ input_data = draw_inputs.cpu().numpy().reshape(-1, input_size)
 input_data = scaler.inverse_transform(input_data)
 
 # 创建时间轴
-time_axis = np.arange(0, 2 * seq_length)
-
+time_axis = np.arange(0, int(seq_length * (factor + 1)))
 
 # 分别绘制每个特征的图表
 for i in range(output_size):
     plt.figure(figsize=(12, 6))
-    merged_actual = np.concatenate([input_data[-seq_length:, i], actual_outputs[-seq_length:, i]])
-    plt.plot(time_axis[-2 * seq_length:], merged_actual, label=f'Feature {i+1} (Actual 0-{seq_length}h)')
-    plt.plot(time_axis[-seq_length:], actual_outputs[-seq_length:, i], label=f'Feature {i+1} (Actual {seq_length}h-{2 * seq_length}h)')
-    plt.plot(time_axis[-seq_length:], predicted_outputs[-seq_length:, i], label=f'Feature {i+1} (Predicted)', linestyle='dashed')
+    merged_actual = np.concatenate([input_data[-seq_length:, i], actual_outputs[-int(factor * seq_length):, i]])
+    plt.plot(time_axis[-int((factor + 1) * seq_length):], merged_actual, label=f'Feature: {data_head[i]} (Actual 0-{seq_length}h)')
+    plt.plot(time_axis[-int(factor * seq_length):], actual_outputs[-int(factor * seq_length):, i],
+             label=f'Feature: {data_head[i]} (Actual {seq_length}h-{int((factor + 1) * seq_length)}h)')
+    plt.plot(time_axis[-int(factor * seq_length):], predicted_outputs[-int(factor * seq_length):, i], label=f'Feature: {data_head[i]} (Predicted)',
+             linestyle='dashed')
 
-    plt.title(f'Feature {i+1} - Time Series Prediction')
+    plt.title(f'Feature: {data_head[i]} - Time Series Prediction')
     plt.xlabel('Time Steps')
-    plt.ylabel(f'Feature {i+1} Values')
+    plt.ylabel(f'Feature: {data_head[i]} Values')
     plt.legend()
     plt.show()
