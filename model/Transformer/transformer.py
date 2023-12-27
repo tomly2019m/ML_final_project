@@ -19,7 +19,7 @@ data_head = ['HUFL', 'HULL', 'MUFL', 'MULL', 'LUFL', 'LULL', 'OT']
 features = data[data_head].values
 
 # 长时预测还是短时预测
-predict_type = "short"
+predict_type = "long"
 
 factor = 1 if predict_type == "short" else 3.5
 
@@ -93,7 +93,7 @@ train_dataset, val_dataset, test_dataset = random_split(combined_dataset, [train
 # 创建数据加载器
 train_loader = DataLoader(train_dataset, batch_size=32, shuffle=False)
 val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
-test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
 
 # 初始化模型、损失函数和优化器，并将它们移动到 GPU
 model = TimeSeriesTransformer(input_size, hidden_size, output_size, num_layers, num_heads, dropout).to(device)
@@ -101,8 +101,13 @@ MSE = nn.MSELoss()
 MAE = nn.L1Loss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
+# 保存模型的路径
+output_path = './output/'
+
 # 训练模型
-epochs = 1000
+epochs = 10
+best_epoch = 0
+best_val_loss = 1000
 train_MSE_losses = []
 val_avg_MSE_losses = []
 for epoch in range(epochs):
@@ -133,10 +138,11 @@ for epoch in range(epochs):
         val_avg_MSE_losses.append(average_val_MSE_loss)
         print(
             f'Epoch [{epoch + 1}/{epochs}], MSE Loss: {MSE_loss.item():.6f}, Val MSE Loss: {average_val_MSE_loss:.6f}, MAE Loss: {MAE_loss.item():.6f}, Val MAE Loss: {average_val_MAE_loss:.6f}')
+        if average_val_MSE_loss < best_val_loss:
+            torch.save(model, f"{output_path}transformer_{seq_length}h_best.pt")
+            best_val_loss = average_val_MSE_loss
+            best_epoch = epoch
 
-# 保存模型的路径
-output_path = './output/'
-torch.save(model, f"{output_path}lstm_{seq_length}h_epoch={epochs}.pt")
 
 # 绘制loss曲线
 plt.figure(figsize=(10, 5))
@@ -155,6 +161,7 @@ draw_targets = None
 draw_prediction = None
 
 # 测试模型
+model = torch.load(f"{output_path}transformer_{seq_length}h_best.pt")
 model.eval()
 with torch.no_grad():
     test_losses = []
