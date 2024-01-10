@@ -20,7 +20,7 @@ data_head = ['HUFL', 'HULL', 'MUFL', 'MULL', 'LUFL', 'LULL', 'OT']
 features = data[data_head].values
 
 # 长时预测还是短时预测
-predict_type = "long"
+predict_type = "short"
 
 factor = 1 if predict_type == "short" else 3.5
 
@@ -39,7 +39,7 @@ def prepare_data(data, seq_length):
 
 
 class ftat_BiLSTM(nn.Module):
-    def __init__(self, input_size, seq_length, output_size, hidden_size):
+    def __init__(self, input_size, output_size, hidden_size):
         super(ftat_BiLSTM, self).__init__()
 
         self.hidden_dim = hidden_size
@@ -54,6 +54,8 @@ class ftat_BiLSTM(nn.Module):
         self.temporal_k = nn.Linear(hidden_size, hidden_size)
         self.temporal_q = nn.Linear(hidden_size, hidden_size)
 
+        self.lstm2 = nn.LSTM(hidden_size, int(16 * factor), batch_first=True)
+
         self.linear = nn.Linear(hidden_size, int(16 * factor))
         self.fc = nn.Linear(16, output_size)
 
@@ -62,13 +64,13 @@ class ftat_BiLSTM(nn.Module):
 
         # single head
         value = self.feature_v(x)
-        key = self.feature_k(x)
-        query = self.feature_q(x)
+        key = self.feature_k(x + value)
+        query = self.feature_q(x + key)
 
         attention = torch.matmul(query.transpose(1, 2), key)  # B, F, F
         attention = F.softmax(attention, dim=-1)
         attn_output = torch.matmul(value, attention)  # B, T, F
-        return F.tanh(attn_output)
+        return F.tanh(attn_output + x)
 
     def temporal_attn(self, lstm_output):
         # lstm_output: B, T, C
@@ -98,7 +100,7 @@ class ftat_BiLSTM(nn.Module):
         attention = F.softmax(attention, dim=-1)
         attn_output = torch.matmul(attention, value)  # B, T, C
 
-        return attn_output
+        return F.tanh(attn_output)
 
     def forward(self, x):
         # x: B, T, F
@@ -117,9 +119,9 @@ class ftat_BiLSTM(nn.Module):
         # 感觉还是有必要留着，不然会有明显的滞后现象
         temporal_attn_output = self.temporal_attn(lstm_output)  # B, T, C
         # temporal_attn_output = lstm_output  # B, T, C
-
-        out = self.linear(temporal_attn_output)  # B, T_out
-        out = self.fc(out.view(x.size(0), int(factor * seq_length), 16))
+        out, _ = self.lstm2(temporal_attn_output)
+        # out = self.linear(temporal_attn_output)  # B, T_out
+        out = self.fc(out.reshape(x.size(0), int(factor * seq_length), 16))
         return out
 
 
@@ -152,7 +154,7 @@ val_size = int(0.2 * total_size)
 test_size = total_size - train_size - val_size
 
 # 划分合并后的数据集
-train_dataset, val_dataset, test_dataset = random_split(combined_dataset, [train_size, val_size, test_size])
+# train_dataset, val_dataset, test_dataset = random_split(combined_dataset, [train_size, val_size, test_size])
 
 # 创建数据加载器
 train_loader = DataLoader(train_dataset, batch_size=32, shuffle=False)
@@ -160,7 +162,7 @@ val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
 test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
 
 # 初始化模型、损失函数和优化器，并将它们移动到 GPU
-model = ftat_BiLSTM(input_size, seq_length, output_size, hidden_size).to(device)
+model = ftat_BiLSTM(input_size, output_size, hidden_size).to(device)
 MSE = nn.MSELoss()
 MAE = nn.L1Loss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
@@ -169,7 +171,7 @@ optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 output_path = './output/'
 
 # 训练模型
-epochs = 10
+epochs = 1000
 best_epoch = 0
 best_val_loss = 1000
 train_MSE_losses = []

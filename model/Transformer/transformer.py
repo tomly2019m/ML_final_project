@@ -19,7 +19,7 @@ data_head = ['HUFL', 'HULL', 'MUFL', 'MULL', 'LUFL', 'LULL', 'OT']
 features = data[data_head].values
 
 # 长时预测还是短时预测
-predict_type = "long"
+predict_type = "short"
 
 factor = 1 if predict_type == "short" else 3.5
 
@@ -155,7 +155,7 @@ plt.legend()
 plt.show()
 
 # 寻找loss最小的一组数据 作为绘图数据
-min_loss = 10000
+min_loss = 1000
 draw_inputs = None
 draw_targets = None
 draw_prediction = None
