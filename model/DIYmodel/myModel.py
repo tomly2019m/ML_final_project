@@ -8,8 +8,17 @@ from torch.utils.data import DataLoader, TensorDataset, ConcatDataset, random_sp
 import torch.nn.functional as F
 
 # 读取数据
-data_path = '../../dataset/ETTh1.csv'
-data = pd.read_csv(data_path)
+train_path = '../../dataset/train_set.csv'
+
+valid_path = '../../dataset/validation_set.csv'
+
+test_path = '../../dataset/test_set.csv'
+
+train_data = pd.read_csv(train_path)
+
+valid_data = pd.read_csv(valid_path)
+
+test_data = pd.read_csv(test_path)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -17,16 +26,19 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 data_head = ['HUFL', 'HULL', 'MUFL', 'MULL', 'LUFL', 'LULL', 'OT']
 
 # 提取需要的特征列
-features = data[data_head].values
+train_features = train_data[data_head].values
+valid_features = valid_data[data_head].values
+test_features = test_data[data_head].values
+
+features = np.concatenate((train_features, valid_features, test_features), axis=0)
+# 数据标准化
+scaler = MinMaxScaler(feature_range=(-1, 1))
+features_normalized = scaler.fit_transform(features)
 
 # 长时预测还是短时预测
 predict_type = "short"
 
 factor = 1 if predict_type == "short" else 3.5
-
-# 数据标准化
-scaler = MinMaxScaler(feature_range=(-1, 1))
-features_normalized = scaler.fit_transform(features)
 
 
 # 准备数据集
@@ -73,24 +85,6 @@ class ftat_BiLSTM(nn.Module):
         return F.tanh(attn_output + x)
 
     def temporal_attn(self, lstm_output):
-        # lstm_output: B, T, C
-        # B, T, C = lstm_output.shape
-        # heads = 2
-        # hidperhead = self.hidden_dim // heads
-
-        # # 使用多头注意力机制
-        # value = self.temporal_v(lstm_output).view(B, T, heads, hidperhead).permute(2, 0, 1, 3).contiguous().view(-1, T, hidperhead)
-        # key = self.temporal_k(lstm_output).view(B, T, heads, hidperhead).permute(2, 0, 1, 3).contiguous().view(-1, T, hidperhead)
-        # query = self.temporal_q(lstm_output).view(B, T, heads, hidperhead).permute(2, 0, 1, 3).contiguous().view(-1, T, hidperhead)
-        # # B * H, T, hidperhead
-
-        # attention = torch.matmul(query, key.transpose(1, 2))  # B * H, T, T
-        # attention /= (hidperhead ** 0.5)  # 缩放点积
-        # attention = F.softmax(attention, dim=-1)
-        # attn_output = torch.matmul(attention, value)  # B * H, T, hidperhead
-
-        # attn_output = attn_output.view(heads, B, T, hidperhead).permute(1, 2, 0, 3).contiguous().view(B, T, -1)  # B, T, C
-
         # single head
         value = self.temporal_v(lstm_output)
         key = self.temporal_k(lstm_output)
@@ -132,29 +126,20 @@ output_size = 7  # 输出特征数
 dropout = 0.1
 seq_length = 96  # 输入序列长度
 
-# 准备训练数据
-input_seq, target_seq = prepare_data(features_normalized, seq_length)
+train_input, train_target = prepare_data(features_normalized[:8640], seq_length)
 
-# 划分数据集
-train_size = int(0.6 * len(input_seq))
-val_size = int(0.2 * len(input_seq))
-test_size = len(input_seq) - train_size - val_size
+valid_input, valid_target = prepare_data(features_normalized[8640: 8640 + 2976], seq_length)
 
-train_dataset = TensorDataset(input_seq[:train_size], target_seq[:train_size])
-val_dataset = TensorDataset(input_seq[train_size:train_size + val_size], target_seq[train_size:train_size + val_size])
-test_dataset = TensorDataset(input_seq[train_size + val_size:], target_seq[train_size + val_size:])
+test_input, test_target = prepare_data(features_normalized[8640 + 2976:], seq_length)
 
-# 合并三个数据集
-combined_dataset = ConcatDataset([train_dataset, val_dataset, test_dataset])
+train_dataset = TensorDataset(train_input, train_target)
+val_dataset = TensorDataset(valid_input, valid_target)
+test_dataset = TensorDataset(test_input, test_target)
 
-# 计算各个数据集的新划分大小
-total_size = len(combined_dataset)
-train_size = int(0.6 * total_size)
-val_size = int(0.2 * total_size)
-test_size = total_size - train_size - val_size
-
-# 划分合并后的数据集
-# train_dataset, val_dataset, test_dataset = random_split(combined_dataset, [train_size, val_size, test_size])
+# 创建数据加载器
+train_loader = DataLoader(train_dataset, batch_size=32, shuffle=False)
+val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
+test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
 
 # 创建数据加载器
 train_loader = DataLoader(train_dataset, batch_size=32, shuffle=False)

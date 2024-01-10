@@ -79,14 +79,6 @@ valid_input, valid_target = prepare_data(features_normalized[8640: 8640 + 2976],
 
 test_input, test_target = prepare_data(features_normalized[8640 + 2976:], seq_length)
 
-# 准备训练数据
-input_seq, target_seq = prepare_data(features_normalized, seq_length)
-
-# 划分数据集
-train_size = int(0.6 * len(input_seq))
-val_size = int(0.2 * len(input_seq))
-test_size = len(input_seq) - train_size - val_size
-
 train_dataset = TensorDataset(train_input, train_target)
 val_dataset = TensorDataset(valid_input, valid_target)
 test_dataset = TensorDataset(test_input, test_target)
