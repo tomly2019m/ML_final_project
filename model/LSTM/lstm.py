@@ -31,7 +31,7 @@ test_features = test_data[data_head].values
 
 features = np.concatenate((train_features, valid_features, test_features), axis=0)
 # 数据标准化
-scaler = MinMaxScaler(feature_range=(-1, 1))
+scaler = MinMaxScaler(feature_range=(0, 1))
 features_normalized = scaler.fit_transform(features)
 
 # 长时预测还是短时预测
@@ -84,8 +84,8 @@ val_dataset = TensorDataset(valid_input, valid_target)
 test_dataset = TensorDataset(test_input, test_target)
 
 # 创建数据加载器
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=False)
-val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
+train_loader = DataLoader(train_dataset, batch_size=64, shuffle=False)
+val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False)
 test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
 
 # 初始化模型、损失函数和优化器，并将它们移动到 GPU
@@ -98,7 +98,7 @@ optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 output_path = './output/'
 
 # 训练模型
-epochs = 1000
+epochs = 500
 best_epoch = 0
 best_val_loss = 1000
 train_MSE_losses = []
@@ -108,20 +108,20 @@ for epoch in range(epochs):
     for inputs, targets in train_loader:
         optimizer.zero_grad()
         outputs = model(inputs)
-        MSE_loss = MSE(outputs, targets)
-        MAE_loss = MAE(outputs, targets)
+        MSE_loss = MSE(outputs[:, :, -1:], targets[:, :, -1:])
+        MAE_loss = MAE(outputs[:, :, -1:], targets[:, :, -1:])
         MSE_loss.backward()
         optimizer.step()
 
     # 在验证集上进行验证
     model.eval()
-    with torch.no_grad():
+    with (torch.no_grad()):
         val_MSE_losses = []
         val_MAE_losses = []
         for val_inputs, val_targets in val_loader:
             val_outputs = model(val_inputs)
-            val_MSE_loss = MSE(val_outputs, val_targets)
-            val_MAE_loss = MAE(val_outputs, val_targets)
+            val_MSE_loss = MSE(val_outputs[:, :, -1:], val_targets[:, :, -1:])
+            val_MAE_loss = MAE(val_outputs[:, :, -1:], val_targets[:, :, -1:])
             val_MSE_losses.append(val_MSE_loss.item())
             val_MAE_losses.append(val_MAE_loss.item())
 
@@ -131,7 +131,7 @@ for epoch in range(epochs):
         val_avg_MSE_losses.append(average_val_MSE_loss)
         print(
             f'Epoch [{epoch + 1}/{epochs}], MSE Loss: {MSE_loss.item():.6f}, Val MSE Loss: {average_val_MSE_loss:.6f}, MAE Loss: {MAE_loss.item():.6f}, Val MAE Loss: {average_val_MAE_loss:.6f}')
-        if average_val_MSE_loss < best_val_loss:
+        if average_val_MSE_loss < best_val_loss and epoch >= 400:
             torch.save(model, f"{output_path}lstm_{seq_length}h_best.pt")
             best_val_loss = average_val_MSE_loss
             best_epoch = epoch
@@ -153,6 +153,7 @@ draw_inputs = None
 draw_targets = None
 draw_prediction = None
 
+print(best_epoch)
 # 测试模型
 model = torch.load(f"{output_path}lstm_{seq_length}h_best.pt")
 model.eval()
@@ -162,12 +163,13 @@ with torch.no_grad():
     for test_inputs, test_targets in test_loader:
         test_inputs, test_targets = test_inputs.to(device), test_targets.to(device)
         test_outputs = model(test_inputs)
-        test_loss = MSE(test_outputs, test_targets)
-        MAE_loss = MAE(test_outputs, test_targets)
+        test_loss = MSE(test_outputs[:, :, -1:], test_targets[:, :, -1:])
+        draw_loss = MAE(test_outputs[:, :, -1:], test_targets[:, :, -1:])
+        MAE_loss = MAE(test_outputs[:, :, -1:], test_targets[:, :, -1:])
         test_losses.append(test_loss.item())
         MAE_losses.append(MAE_loss.item())
-        if test_loss.item() < min_loss:
-            min_loss = test_loss.item()
+        if draw_loss.item() < min_loss:
+            min_loss = draw_loss.item()
             draw_inputs = test_inputs
             draw_targets = test_targets
             draw_prediction = test_outputs.cpu().numpy()

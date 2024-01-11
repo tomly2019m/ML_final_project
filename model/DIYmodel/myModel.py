@@ -3,7 +3,7 @@ import torch.nn as nn
 import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from torch.utils.data import DataLoader, TensorDataset, ConcatDataset, random_split
 import torch.nn.functional as F
 
@@ -32,7 +32,7 @@ test_features = test_data[data_head].values
 
 features = np.concatenate((train_features, valid_features, test_features), axis=0)
 # 数据标准化
-scaler = MinMaxScaler(feature_range=(-1, 1))
+scaler = MinMaxScaler(feature_range=(0, 1))
 features_normalized = scaler.fit_transform(features)
 
 # 长时预测还是短时预测
@@ -66,8 +66,6 @@ class ftat_BiLSTM(nn.Module):
         self.temporal_k = nn.Linear(hidden_size, hidden_size)
         self.temporal_q = nn.Linear(hidden_size, hidden_size)
 
-        self.lstm2 = nn.LSTM(hidden_size, int(16 * factor), batch_first=True)
-
         self.linear = nn.Linear(hidden_size, int(16 * factor))
         self.fc = nn.Linear(16, output_size)
 
@@ -76,13 +74,13 @@ class ftat_BiLSTM(nn.Module):
 
         # single head
         value = self.feature_v(x)
-        key = self.feature_k(x + value)
-        query = self.feature_q(x + key)
+        key = self.feature_k(x)
+        query = self.feature_q(x)
 
         attention = torch.matmul(query.transpose(1, 2), key)  # B, F, F
         attention = F.softmax(attention, dim=-1)
         attn_output = torch.matmul(value, attention)  # B, T, F
-        return F.tanh(attn_output + x)
+        return F.tanh(attn_output)
 
     def temporal_attn(self, lstm_output):
         # single head
@@ -94,7 +92,7 @@ class ftat_BiLSTM(nn.Module):
         attention = F.softmax(attention, dim=-1)
         attn_output = torch.matmul(attention, value)  # B, T, C
 
-        return F.tanh(attn_output)
+        return attn_output
 
     def forward(self, x):
         # x: B, T, F
@@ -113,8 +111,7 @@ class ftat_BiLSTM(nn.Module):
         # 感觉还是有必要留着，不然会有明显的滞后现象
         temporal_attn_output = self.temporal_attn(lstm_output)  # B, T, C
         # temporal_attn_output = lstm_output  # B, T, C
-        out, _ = self.lstm2(temporal_attn_output)
-        # out = self.linear(temporal_attn_output)  # B, T_out
+        out = self.linear(temporal_attn_output)  # B, T_out
         out = self.fc(out.reshape(x.size(0), int(factor * seq_length), 16))
         return out
 
@@ -136,14 +133,10 @@ train_dataset = TensorDataset(train_input, train_target)
 val_dataset = TensorDataset(valid_input, valid_target)
 test_dataset = TensorDataset(test_input, test_target)
 
-# 创建数据加载器
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=False)
-val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
-test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
 
 # 创建数据加载器
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=False)
-val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
+train_loader = DataLoader(train_dataset, batch_size=64, shuffle=False)
+val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False)
 test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
 
 # 初始化模型、损失函数和优化器，并将它们移动到 GPU
@@ -156,7 +149,7 @@ optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 output_path = './output/'
 
 # 训练模型
-epochs = 1000
+epochs = 500
 best_epoch = 0
 best_val_loss = 1000
 train_MSE_losses = []
@@ -166,8 +159,8 @@ for epoch in range(epochs):
     for inputs, targets in train_loader:
         optimizer.zero_grad()
         outputs = model(inputs)
-        MSE_loss = MSE(outputs, targets)
-        MAE_loss = MAE(outputs, targets)
+        MSE_loss = MSE(outputs[:, :, -1:], targets[:, :, -1:])
+        MAE_loss = MAE(outputs[:, :, -1:], targets[:, :, -1:])
         MSE_loss.backward()
         optimizer.step()
 
@@ -178,8 +171,8 @@ for epoch in range(epochs):
         val_MAE_losses = []
         for val_inputs, val_targets in val_loader:
             val_outputs = model(val_inputs)
-            val_MSE_loss = MSE(val_outputs, val_targets)
-            val_MAE_loss = MAE(val_outputs, val_targets)
+            val_MSE_loss = MSE(val_outputs[:, :, -1:], val_targets[:, :, -1:])
+            val_MAE_loss = MAE(val_outputs[:, :, -1:], val_targets[:, :, -1:])
             val_MSE_losses.append(val_MSE_loss.item())
             val_MAE_losses.append(val_MAE_loss.item())
 
@@ -189,7 +182,7 @@ for epoch in range(epochs):
         val_avg_MSE_losses.append(average_val_MSE_loss)
         print(
             f'Epoch [{epoch + 1}/{epochs}], MSE Loss: {MSE_loss.item():.6f}, Val MSE Loss: {average_val_MSE_loss:.6f}, MAE Loss: {MAE_loss.item():.6f}, Val MAE Loss: {average_val_MAE_loss:.6f}')
-        if average_val_MSE_loss < best_val_loss:
+        if average_val_MSE_loss < best_val_loss and epoch >= 400:
             torch.save(model, f"{output_path}DIY_model_{seq_length}h_best.pt")
             best_val_loss = average_val_MSE_loss
             best_epoch = epoch
@@ -211,8 +204,10 @@ draw_inputs = None
 draw_targets = None
 draw_prediction = None
 
+print(best_epoch)
+
 # 测试模型
-model = torch.load(f"{output_path}DIY_model_{seq_length}h_best.pt")
+# model = torch.load(f"{output_path}DIY_model_{seq_length}h_best.pt")
 model.eval()
 with torch.no_grad():
     test_losses = []
@@ -220,12 +215,13 @@ with torch.no_grad():
     for test_inputs, test_targets in test_loader:
         test_inputs, test_targets = test_inputs.to(device), test_targets.to(device)
         test_outputs = model(test_inputs)
-        test_loss = MSE(test_outputs, test_targets)
-        MAE_loss = MAE(test_outputs, test_targets)
+        test_loss = MSE(test_outputs[:, :, -1:], test_targets[:, :, -1:])
+        draw_loss = MSE(test_outputs[:, :, -1:], test_targets[:, :, -1:])
+        MAE_loss = MAE(test_outputs[:, :, -1:], test_targets[:, :, -1:])
         test_losses.append(test_loss.item())
         MAE_losses.append(MAE_loss.item())
-        if test_loss.item() < min_loss:
-            min_loss = test_loss.item()
+        if draw_loss.item() < min_loss:
+            min_loss = draw_loss.item()
             draw_inputs = test_inputs
             draw_targets = test_targets
             draw_prediction = test_outputs.cpu().numpy()
