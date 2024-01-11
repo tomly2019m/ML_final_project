@@ -149,7 +149,7 @@ optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 output_path = './output/'
 
 # 训练模型
-epochs = 500
+epochs = 500 if predict_type == 'short' else 1000
 best_epoch = 0
 best_val_loss = 1000
 train_MSE_losses = []
@@ -182,7 +182,7 @@ for epoch in range(epochs):
         val_avg_MSE_losses.append(average_val_MSE_loss)
         print(
             f'Epoch [{epoch + 1}/{epochs}], MSE Loss: {MSE_loss.item():.6f}, Val MSE Loss: {average_val_MSE_loss:.6f}, MAE Loss: {MAE_loss.item():.6f}, Val MAE Loss: {average_val_MAE_loss:.6f}')
-        if average_val_MSE_loss < best_val_loss and epoch >= 400:
+        if average_val_MSE_loss < best_val_loss and epoch >= (400 if predict_type == 'short' else 500):
             torch.save(model, f"{output_path}DIY_model_{seq_length}h_best.pt")
             best_val_loss = average_val_MSE_loss
             best_epoch = epoch
@@ -207,7 +207,7 @@ draw_prediction = None
 print(best_epoch)
 
 # 测试模型
-# model = torch.load(f"{output_path}DIY_model_{seq_length}h_best.pt")
+model = torch.load(f"{output_path}DIY_model_{seq_length}h_best.pt")
 model.eval()
 with torch.no_grad():
     test_losses = []
@@ -250,7 +250,7 @@ input_data = scaler.inverse_transform(input_data)
 time_axis = np.arange(0, int(seq_length * (factor + 1)))
 
 # 分别绘制每个特征的图表
-for i in range(output_size):
+for i in range(6, 7):
     plt.figure(figsize=(12, 6))
     merged_actual = np.concatenate([input_data[-seq_length:, i], actual_outputs[-int(factor * seq_length):, i]])
     plt.plot(time_axis[-int((factor + 1) * seq_length):], merged_actual, label=f'Feature: {data_head[i]} (Actual 0-{seq_length}h)')
