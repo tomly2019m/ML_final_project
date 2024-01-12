@@ -36,7 +36,7 @@ test_features = test_data[data_head].values
 
 features = np.concatenate((train_features, valid_features, test_features), axis=0)
 # 数据标准化
-scaler = MinMaxScaler(feature_range=(0, 1))
+scaler = MinMaxScaler(feature_range=(-1, 1))
 features_normalized = scaler.fit_transform(features)
 
 # 长时预测还是短时预测

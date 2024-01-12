@@ -35,7 +35,7 @@ test_features = test_data[data_head].values
 
 features = np.concatenate((train_features, valid_features, test_features), axis=0)
 # 数据标准化
-scaler = MinMaxScaler(feature_range=(0, 1))
+scaler = MinMaxScaler(feature_range=(-1, 1))
 features_normalized = scaler.fit_transform(features)
 
 # 长时预测还是短时预测
@@ -76,7 +76,7 @@ class TimeSeriesTransformer(nn.Module):
 # 设置超参数
 input_size = 7  # 输入特征数
 hidden_size = 64  # Transformer隐藏层大小
-output_size = 7  # 输出特征数
+output_size = 1  # 输出特征数
 num_layers = 2  # Transformer层数
 num_heads = 8  # Transformer头数
 dropout = 0.1

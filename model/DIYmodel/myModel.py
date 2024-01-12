@@ -6,8 +6,11 @@ from matplotlib import pyplot as plt
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from torch.utils.data import DataLoader, TensorDataset, ConcatDataset, random_split
 import torch.nn.functional as F
+from model.block import Block
 
-seed = 1024
+# 0 1024
+
+seed = 0
 torch.manual_seed(seed)
 np.random.seed(seed)
 
@@ -36,7 +39,7 @@ test_features = test_data[data_head].values
 
 features = np.concatenate((train_features, valid_features, test_features), axis=0)
 # 数据标准化
-scaler = MinMaxScaler(feature_range=(0, 1))
+scaler = MinMaxScaler(feature_range=(-1, 1))
 features_normalized = scaler.fit_transform(features)
 
 # 长时预测还是短时预测
@@ -60,11 +63,15 @@ class ftat_BiLSTM(nn.Module):
 
         self.hidden_dim = hidden_size
 
+        self.conv = nn.Conv1d(input_size, input_size, kernel_size=3, padding=1)
+
         self.feature_v = nn.Linear(input_size, input_size)
         self.feature_k = nn.Linear(input_size, input_size)
         self.feature_q = nn.Linear(input_size, input_size)
 
-        self.bilstm = nn.LSTM(input_size, hidden_size, 1, batch_first=True, bidirectional=True)
+        self.bilstm = nn.LSTM(input_size, hidden_size, num_layers=2, batch_first=True, bidirectional=True)
+
+        self.conv2 = nn.Conv1d(hidden_size, hidden_size, kernel_size=9, padding=4)
 
         self.temporal_v = nn.Linear(hidden_size, hidden_size)
         self.temporal_k = nn.Linear(hidden_size, hidden_size)
@@ -72,6 +79,8 @@ class ftat_BiLSTM(nn.Module):
 
         self.linear = nn.Linear(hidden_size, int(16 * factor))
         self.fc = nn.Linear(16, output_size)
+
+        self.dropout = nn.Dropout(0.1)
 
     def feature_attn(self, x):
         # x: B, T, F
@@ -82,9 +91,10 @@ class ftat_BiLSTM(nn.Module):
         query = self.feature_q(x)
 
         attention = torch.matmul(query.transpose(1, 2), key)  # B, F, F
+        attention = attention / (input_size ** 0.5)
         attention = F.softmax(attention, dim=-1)
         attn_output = torch.matmul(value, attention)  # B, T, F
-        return F.tanh(attn_output)
+        return F.tanh(attn_output + x)
 
     def temporal_attn(self, lstm_output):
         # single head
@@ -93,18 +103,31 @@ class ftat_BiLSTM(nn.Module):
         query = self.temporal_q(lstm_output)
 
         attention = torch.matmul(query, key.transpose(1, 2))  # B, T, T
+        attention = attention / (hidden_size ** 0.5)
         attention = F.softmax(attention, dim=-1)
         attn_output = torch.matmul(attention, value)  # B, T, C
 
-        return attn_output
+        return attn_output + lstm_output
 
     def forward(self, x):
-        # x: B, T, F
+        # 以p的概率引入高斯噪声
+        noise = np.random.normal(loc=0, scale=0.1, size=x.shape)
+        noise = torch.FloatTensor(noise).to(device)
+        p = 0.1
+        mask = torch.rand(*x.shape, device='cuda') < p
+        x = x + mask * noise / 5
+        x = torch.clamp(x, -1, 1)
 
+        # x: B, T, F
+        conv_out = x.permute(0, 2, 1)
+        conv_out = self.conv(conv_out)
+        conv_out = conv_out.permute(0, 2, 1)
+
+        conv_out = self.dropout(conv_out)
         # 特征维度上进行attention
         # 只使用feature_attn时，在训练集上都表现出较慢的收敛速度
         # feature_attn_output = x
-        feature_attn_output = self.feature_attn(x)  # B, T, F
+        feature_attn_output = self.feature_attn(x + conv_out)  # B, T, F
 
         lstm_output, _ = self.bilstm(feature_attn_output)  # B, T, 2 * C
         batch_size, seq_len, _ = lstm_output.shape
@@ -113,8 +136,14 @@ class ftat_BiLSTM(nn.Module):
 
         # 时间维度上进行attention
         # 感觉还是有必要留着，不然会有明显的滞后现象
-        temporal_attn_output = self.temporal_attn(lstm_output)  # B, T, C
+        conv2_output = lstm_output.permute(0, 2, 1)
+        conv2_output = self.conv2(conv2_output)
+        conv2_output = conv2_output.permute(0, 2, 1)
+        conv2_output = self.dropout(conv2_output)
+
+        temporal_attn_output = self.temporal_attn(conv2_output)  # B, T, C
         # temporal_attn_output = lstm_output  # B, T, C
+        # temporal_attn_output = self.dropout(temporal_attn_output)
         out = self.linear(temporal_attn_output)  # B, T_out
         out = self.fc(out.reshape(x.size(0), int(factor * seq_length), 16))
         return out
@@ -123,7 +152,7 @@ class ftat_BiLSTM(nn.Module):
 # 设置超参数
 input_size = 7  # 输入特征数
 hidden_size = 64  # 隐藏层大小
-output_size = 7  # 输出特征数
+output_size = 1  # 输出特征数
 dropout = 0.1
 seq_length = 96  # 输入序列长度
 
@@ -137,6 +166,26 @@ train_dataset = TensorDataset(train_input, train_target)
 val_dataset = TensorDataset(valid_input, valid_target)
 test_dataset = TensorDataset(test_input, test_target)
 
+
+def add_gaussian_noise(sample, mean=0, std=0.02):
+    noise = torch.randn_like(sample) * std + mean
+    return sample + noise
+
+
+augmented_data = []
+select_index = set()
+for i in range(int(len(train_dataset) * 0.2)):
+    while True:
+        rand_index = np.random.randint(0, len(train_dataset))
+        if not rand_index in select_index:
+            select_index.add(rand_index)
+            break
+    input, target = train_dataset[rand_index]
+    input = add_gaussian_noise(input)
+    target = add_gaussian_noise(target)
+    augmented_data.append((input, target))
+
+train_dataset = ConcatDataset([train_dataset, augmented_data])
 
 # 创建数据加载器
 train_loader = DataLoader(train_dataset, batch_size=64, shuffle=False)
@@ -191,7 +240,6 @@ for epoch in range(epochs):
             best_val_loss = average_val_MSE_loss
             best_epoch = epoch
 
-
 # 绘制loss曲线
 plt.figure(figsize=(10, 5))
 plt.plot(range(1, epochs + 1), train_MSE_losses, label='Train Loss')
@@ -240,7 +288,6 @@ print(f'Mean Absolute Error on Test Data: {average_MAE_loss:.4f}')
 iterator = iter(test_loader)
 draw_inputs, draw_targets = next(iterator)
 
-
 with torch.no_grad():
     draw_prediction = model(draw_inputs).cpu().numpy()
 # 获取最后一组预测结果
@@ -275,10 +322,12 @@ time_axis = np.arange(0, int(seq_length * (factor + 1)))
 for i in range(6, 7):
     plt.figure(figsize=(12, 6))
     merged_actual = np.concatenate([input_data[-seq_length:, i], actual_outputs[-int(factor * seq_length):, i]])
-    plt.plot(time_axis[-int((factor + 1) * seq_length):], merged_actual, label=f'Feature: {data_head[i]} (Actual 0-{seq_length}h)')
+    plt.plot(time_axis[-int((factor + 1) * seq_length):], merged_actual,
+             label=f'Feature: {data_head[i]} (Actual 0-{seq_length}h)')
     plt.plot(time_axis[-int(factor * seq_length):], actual_outputs[-int(factor * seq_length):, i],
              label=f'Feature: {data_head[i]} (Actual {seq_length}h-{int((factor + 1) * seq_length)}h)')
-    plt.plot(time_axis[-int(factor * seq_length):], predicted_outputs[-int(factor * seq_length):, i], label=f'Feature: {data_head[i]} (Predicted)',
+    plt.plot(time_axis[-int(factor * seq_length):], predicted_outputs[-int(factor * seq_length):, i],
+             label=f'Feature: {data_head[i]} (Predicted)',
              linestyle='dashed')
 
     plt.title(f'Feature: {data_head[i]} - Time Series Prediction')
