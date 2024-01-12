@@ -6,6 +6,11 @@ from matplotlib import pyplot as plt
 from sklearn.preprocessing import MinMaxScaler
 from torch.utils.data import DataLoader, TensorDataset, ConcatDataset, random_split
 
+
+seed = 1024
+torch.manual_seed(seed)
+np.random.seed(seed)
+
 # 读取数据
 train_path = '../../dataset/train_set.csv'
 
@@ -35,7 +40,7 @@ scaler = MinMaxScaler(feature_range=(0, 1))
 features_normalized = scaler.fit_transform(features)
 
 # 长时预测还是短时预测
-predict_type = "long"
+predict_type = "short"
 
 factor = 1 if predict_type == "short" else 3.5
 
@@ -68,10 +73,8 @@ class LSTM(nn.Module):
 # 参数设置
 input_size = 7  # 输入特征数
 hidden_size = 64  # 隐藏层大小
-output_size = 7  # 输出特征数
+output_size = 1  # 输出特征数
 seq_length = 96  # 输入序列长度
-
-
 
 train_input, train_target = prepare_data(features_normalized[:8640], seq_length)
 
@@ -136,7 +139,6 @@ for epoch in range(epochs):
             best_val_loss = average_val_MSE_loss
             best_epoch = epoch
 
-
 # 绘制loss曲线
 plt.figure(figsize=(10, 5))
 plt.plot(range(1, epochs + 1), train_MSE_losses, label='Train Loss')
@@ -180,15 +182,26 @@ average_MAE_loss = np.mean(MAE_losses)
 print(f'Mean Squared Error on Test Data: {average_test_loss:.4f}')
 print(f'Mean Absolute Error on Test Data: {average_MAE_loss:.4f}')
 
+# 使用开头数据作为绘图输入
+iterator = iter(test_loader)
+draw_inputs, draw_targets = next(iterator)
+
+
+with torch.no_grad():
+    draw_prediction = model(draw_inputs).cpu().numpy()
 # 获取最后一组预测结果
 predicted_outputs = draw_prediction
 
+padded_outputs = np.zeros((predicted_outputs.shape[0], predicted_outputs.shape[1], input_size))
+padded_outputs[:, :, -1] = predicted_outputs[:, :, -1]
+predicted_outputs = padded_outputs
+
 # 反标准化预测结果
-predicted_outputs = scaler.inverse_transform(predicted_outputs.reshape(-1, output_size))
+predicted_outputs = scaler.inverse_transform(predicted_outputs.reshape(-1, input_size))
 
 # 反标准化测试集目标数据
 actual_outputs = draw_targets.cpu().numpy()
-actual_outputs = scaler.inverse_transform(actual_outputs.reshape(-1, output_size))
+actual_outputs = scaler.inverse_transform(actual_outputs.reshape(-1, input_size))
 
 # 反标准化测试集输入数据（前96小时已知数据）
 input_data = draw_inputs.cpu().numpy().reshape(-1, input_size)
@@ -201,10 +214,12 @@ time_axis = np.arange(0, int(seq_length * (factor + 1)))
 for i in range(6, 7):
     plt.figure(figsize=(12, 6))
     merged_actual = np.concatenate([input_data[-seq_length:, i], actual_outputs[-int(factor * seq_length):, i]])
-    plt.plot(time_axis[-int((factor + 1) * seq_length):], merged_actual, label=f'Feature: {data_head[i]} (Actual 0-{seq_length}h)')
+    plt.plot(time_axis[-int((factor + 1) * seq_length):], merged_actual,
+             label=f'Feature: {data_head[i]} (Actual 0-{seq_length}h)')
     plt.plot(time_axis[-int(factor * seq_length):], actual_outputs[-int(factor * seq_length):, i],
              label=f'Feature: {data_head[i]} (Actual {seq_length}h-{int((factor + 1) * seq_length)}h)')
-    plt.plot(time_axis[-int(factor * seq_length):], predicted_outputs[-int(factor * seq_length):, i], label=f'Feature: {data_head[i]} (Predicted)',
+    plt.plot(time_axis[-int(factor * seq_length):], predicted_outputs[-int(factor * seq_length):, i],
+             label=f'Feature: {data_head[i]} (Predicted)',
              linestyle='dashed')
 
     plt.title(f'Feature: {data_head[i]} - Time Series Prediction')

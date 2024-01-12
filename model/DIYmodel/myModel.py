@@ -7,6 +7,10 @@ from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from torch.utils.data import DataLoader, TensorDataset, ConcatDataset, random_split
 import torch.nn.functional as F
 
+seed = 1024
+torch.manual_seed(seed)
+np.random.seed(seed)
+
 # 读取数据
 train_path = '../../dataset/train_set.csv'
 
@@ -232,15 +236,33 @@ average_MAE_loss = np.mean(MAE_losses)
 print(f'Mean Squared Error on Test Data: {average_test_loss:.4f}')
 print(f'Mean Absolute Error on Test Data: {average_MAE_loss:.4f}')
 
+# 使用开头数据作为绘图输入
+iterator = iter(test_loader)
+draw_inputs, draw_targets = next(iterator)
+
+
+with torch.no_grad():
+    draw_prediction = model(draw_inputs).cpu().numpy()
 # 获取最后一组预测结果
 predicted_outputs = draw_prediction
 
+padded_outputs = np.zeros((predicted_outputs.shape[0], predicted_outputs.shape[1], input_size))
+padded_outputs[:, :, -1] = predicted_outputs[:, :, -1]
+predicted_outputs = padded_outputs
+
+# 获取最后一组预测结果
+predicted_outputs = draw_prediction
+
+padded_outputs = np.zeros((predicted_outputs.shape[0], predicted_outputs.shape[1], input_size))
+padded_outputs[:, :, -1] = predicted_outputs[:, :, -1]
+predicted_outputs = padded_outputs
+
 # 反标准化预测结果
-predicted_outputs = scaler.inverse_transform(predicted_outputs.reshape(-1, output_size))
+predicted_outputs = scaler.inverse_transform(predicted_outputs.reshape(-1, input_size))
 
 # 反标准化测试集目标数据
 actual_outputs = draw_targets.cpu().numpy()
-actual_outputs = scaler.inverse_transform(actual_outputs.reshape(-1, output_size))
+actual_outputs = scaler.inverse_transform(actual_outputs.reshape(-1, input_size))
 
 # 反标准化测试集输入数据（前96小时已知数据）
 input_data = draw_inputs.cpu().numpy().reshape(-1, input_size)

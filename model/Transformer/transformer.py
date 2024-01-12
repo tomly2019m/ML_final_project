@@ -6,6 +6,10 @@ from matplotlib import pyplot as plt
 from sklearn.preprocessing import MinMaxScaler
 from torch.utils.data import DataLoader, TensorDataset, ConcatDataset, random_split
 
+seed = 1024
+torch.manual_seed(seed)
+np.random.seed(seed)
+
 # 读取数据
 train_path = '../../dataset/train_set.csv'
 
@@ -185,6 +189,20 @@ average_test_loss = np.mean(test_losses)
 average_MAE_loss = np.mean(MAE_losses)
 print(f'Mean Squared Error on Test Data: {average_test_loss:.4f}')
 print(f'Mean Absolute Error on Test Data: {average_MAE_loss:.4f}')
+
+# 使用开头数据作为绘图输入
+iterator = iter(test_loader)
+draw_inputs, draw_targets = next(iterator)
+
+
+with torch.no_grad():
+    draw_prediction = model(draw_inputs).cpu().numpy()
+# 获取最后一组预测结果
+predicted_outputs = draw_prediction
+
+padded_outputs = np.zeros((predicted_outputs.shape[0], predicted_outputs.shape[1], input_size))
+padded_outputs[:, :, -1] = predicted_outputs[:, :, -1]
+predicted_outputs = padded_outputs
 
 # 获取最后一组预测结果
 predicted_outputs = draw_prediction
