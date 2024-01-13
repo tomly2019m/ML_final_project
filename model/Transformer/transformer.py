@@ -5,8 +5,9 @@ import pandas as pd
 from matplotlib import pyplot as plt
 from sklearn.preprocessing import MinMaxScaler
 from torch.utils.data import DataLoader, TensorDataset, ConcatDataset, random_split
+import torch.nn.functional as F
 
-seed = 1024
+seed = 0
 torch.manual_seed(seed)
 np.random.seed(seed)
 
@@ -53,21 +54,44 @@ def prepare_data(data, seq_length):
     return torch.FloatTensor(input_seq).to(device), torch.FloatTensor(target_seq).to(device)
 
 
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_len=512):
+        super(PositionalEncoding, self).__init__()
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term2 = torch.pow(torch.tensor(10000.0), torch.arange(0, d_model, 2).float() / d_model)
+        div_term1 = torch.pow(torch.tensor(10000.0), torch.arange(1, d_model, 2).float() / d_model)
+        # 高级切片方式，即从0开始，两个步长取一个。即奇数和偶数位置赋值不一样。直观来看就是每一句话的
+        pe[:, 0::2] = torch.sin(position * div_term2)
+        pe[:, 1::2] = torch.cos(position * div_term1)
+        # 这里是为了与x的维度保持一致，释放了一个维度
+        pe = pe.unsqueeze(0).transpose(0, 1)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        x = x + self.pe[:x.size(0), :]
+        return x
+
+
 # 构建Transformer模型
 class TimeSeriesTransformer(nn.Module):
     def __init__(self, input_size, hidden_size, output_size, num_layers, num_heads, dropout=0.1):
         super(TimeSeriesTransformer, self).__init__()
         self.embedding = nn.Linear(input_size, hidden_size)
-        self.transformer = nn.Transformer(d_model=hidden_size, nhead=num_heads, num_encoder_layers=num_layers,
-                                          num_decoder_layers=num_layers)
+        self.encoder_layer = nn.TransformerEncoderLayer(hidden_size, nhead=num_heads,
+                                                        dim_feedforward=hidden_size * num_heads, batch_first=True)
+        self.encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=num_layers)
+        self.trans = nn.Linear(hidden_size, input_size)
+        self.linear2 = nn.GRU(input_size, hidden_size, batch_first=True)
         self.fc = nn.Linear(hidden_size, int(16 * factor))
         self.linear = nn.Linear(16, output_size)
 
     def forward(self, x):
-        x = self.embedding(x)
-        x = x.permute(1, 0, 2)  # 调整形状以适应Transformer的输入要求
-        x = self.transformer(x, x)
-        x = x.permute(1, 0, 2)  # 恢复原始形状
+        x1 = self.embedding(x)
+        x1 = self.encoder(x1)
+        x1 = self.trans(x1)
+        x1 = F.tanh(x1)
+        x, _ = self.linear2(x + x1)
         x = self.fc(x)
         x = self.linear(x.view(x.size(0), int(factor * seq_length), 16))
         return x
@@ -78,7 +102,7 @@ input_size = 7  # 输入特征数
 hidden_size = 64  # Transformer隐藏层大小
 output_size = 1  # 输出特征数
 num_layers = 2  # Transformer层数
-num_heads = 8  # Transformer头数
+num_heads = 8 # Transformer头数
 dropout = 0.1
 seq_length = 96  # 输入序列长度
 
@@ -145,7 +169,6 @@ for epoch in range(epochs):
             best_val_loss = average_val_MSE_loss
             best_epoch = epoch
 
-
 # 绘制loss曲线
 plt.figure(figsize=(10, 5))
 plt.plot(range(1, epochs + 1), train_MSE_losses, label='Train Loss')
@@ -161,7 +184,6 @@ min_loss = 500
 draw_inputs = None
 draw_targets = None
 draw_prediction = None
-
 
 print(best_epoch)
 # 测试模型
@@ -194,7 +216,6 @@ print(f'Mean Absolute Error on Test Data: {average_MAE_loss:.4f}')
 iterator = iter(test_loader)
 draw_inputs, draw_targets = next(iterator)
 
-
 with torch.no_grad():
     draw_prediction = model(draw_inputs).cpu().numpy()
 # 获取最后一组预测结果
@@ -204,15 +225,12 @@ padded_outputs = np.zeros((predicted_outputs.shape[0], predicted_outputs.shape[1
 padded_outputs[:, :, -1] = predicted_outputs[:, :, -1]
 predicted_outputs = padded_outputs
 
-# 获取最后一组预测结果
-predicted_outputs = draw_prediction
-
 # 反标准化预测结果
-predicted_outputs = scaler.inverse_transform(predicted_outputs.reshape(-1, output_size))
+predicted_outputs = scaler.inverse_transform(predicted_outputs.reshape(-1, input_size))
 
 # 反标准化测试集目标数据
 actual_outputs = draw_targets.cpu().numpy()
-actual_outputs = scaler.inverse_transform(actual_outputs.reshape(-1, output_size))
+actual_outputs = scaler.inverse_transform(actual_outputs.reshape(-1, input_size))
 
 # 反标准化测试集输入数据（前96小时已知数据）
 input_data = draw_inputs.cpu().numpy().reshape(-1, input_size)
@@ -225,10 +243,12 @@ time_axis = np.arange(0, int(seq_length * (factor + 1)))
 for i in range(6, 7):
     plt.figure(figsize=(12, 6))
     merged_actual = np.concatenate([input_data[-seq_length:, i], actual_outputs[-int(factor * seq_length):, i]])
-    plt.plot(time_axis[-int((factor + 1) * seq_length):], merged_actual, label=f'Feature: {data_head[i]} (Actual 0-{seq_length}h)')
+    plt.plot(time_axis[-int((factor + 1) * seq_length):], merged_actual,
+             label=f'Feature: {data_head[i]} (Actual 0-{seq_length}h)')
     plt.plot(time_axis[-int(factor * seq_length):], actual_outputs[-int(factor * seq_length):, i],
              label=f'Feature: {data_head[i]} (Actual {seq_length}h-{int((factor + 1) * seq_length)}h)')
-    plt.plot(time_axis[-int(factor * seq_length):], predicted_outputs[-int(factor * seq_length):, i], label=f'Feature: {data_head[i]} (Predicted)',
+    plt.plot(time_axis[-int(factor * seq_length):], predicted_outputs[-int(factor * seq_length):, i],
+             label=f'Feature: {data_head[i]} (Predicted)',
              linestyle='dashed')
 
     plt.title(f'Feature: {data_head[i]} - Time Series Prediction')
