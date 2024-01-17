@@ -1,3 +1,6 @@
+import os
+from datetime import datetime
+
 import torch
 import torch.nn as nn
 import numpy as np
@@ -6,7 +9,6 @@ from matplotlib import pyplot as plt
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from torch.utils.data import DataLoader, TensorDataset, ConcatDataset, random_split
 import torch.nn.functional as F
-from model.block import Block
 
 # 0 1024
 
@@ -43,7 +45,7 @@ scaler = MinMaxScaler(feature_range=(-1, 1))
 features_normalized = scaler.fit_transform(features)
 
 # 长时预测还是短时预测
-predict_type = "short"
+predict_type = "long"
 
 factor = 1 if predict_type == "short" else 3.5
 
@@ -151,7 +153,7 @@ class ftat_BiLSTM(nn.Module):
 
 # 设置超参数
 input_size = 7  # 输入特征数
-hidden_size = 64  # 隐藏层大小
+hidden_size = 512  # 隐藏层大小
 output_size = 1  # 输出特征数
 dropout = 0.1
 seq_length = 96  # 输入序列长度
@@ -199,7 +201,8 @@ MAE = nn.L1Loss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
 # 保存模型的路径
-output_path = './output/'
+output_path = f'./output/{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}/'
+os.makedirs(output_path)
 
 # 训练模型
 epochs = 500 if predict_type == 'short' else 1000
@@ -249,6 +252,7 @@ plt.xlabel('Epochs')
 plt.ylabel('Loss')
 plt.legend()
 plt.show()
+plt.savefig(output_path + 'loss.png')
 
 # 寻找loss最小的一组数据 作为绘图数据
 min_loss = 10000
@@ -283,6 +287,11 @@ average_test_loss = np.mean(test_losses)
 average_MAE_loss = np.mean(MAE_losses)
 print(f'Mean Squared Error on Test Data: {average_test_loss:.4f}')
 print(f'Mean Absolute Error on Test Data: {average_MAE_loss:.4f}')
+std_test_loss = np.std(test_losses)
+std_MAE_loss = np.std(MAE_losses)
+print(f'standard Deviation of Mean Squared Error on Test Data:{std_test_loss:.4f}' )
+print(f'standard Deviation of Mean Absolute Error on Test Data:{std_MAE_loss: .4f}')
+
 
 # 使用开头数据作为绘图输入
 iterator = iter(test_loader)
@@ -335,3 +344,17 @@ for i in range(6, 7):
     plt.ylabel(f'Feature: {data_head[i]} Values')
     plt.legend()
     plt.show()
+    plt.savefig(output_path + 'ot.png')
+
+with open(output_path + "parameter.txt", 'w') as f:
+    f.write(f"hidden_size={hidden_size}\n")
+    f.write(f'batch_size=64\n')
+    f.write(f'lr=0.001\n')
+    f.write(f'noise_std=0.02\n')
+    f.write(f'percent=0.2\n')
+    f.write(f'MSE={average_test_loss}\n')
+    f.write(f'MAE={average_MAE_loss}\n')
+    f.write(f'DR={dropout}\n')
+    f.write(f'mseSTD={std_test_loss}\n')
+    f.write(f'MAEStd={std_MAE_loss}\n')
+    f.write(f'seed={seed}')
